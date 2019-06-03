@@ -1,5 +1,31 @@
 class Persephone {
-    fetch = async (url = '/', method = 'GET', options = {}) => {
+    constructor(aditionalErrorCodes = [], errorsWhitelist = []) {
+        this.errorStatuses = [0, 400, 401, 403, 404, 405, 500, 502, 503]
+    }
+
+    addErrorsToList = (aditionalErrorCodes) => {
+        this.errorStatuses.push(...aditionalErrorCodes)
+    }
+
+    removeErrorsFromList = (errorsWhitelist) => {
+        this.errorStatuses.filter((v) => {
+            return errorsWhitelist.indexOf(v) !== -1
+        })
+    }
+
+    isStatusCodeValid = () => {
+        return this.errorStatuses.indexOf(this.statusCode) === -1
+    }
+
+    get = async (url, options = {}) => {
+        return this.fetch(url, 'GET', options)
+    }
+
+    post = async (url, options = {}) => {
+        return this.fetch(url, 'POST', options)
+    }
+
+    fetch = async (url = '/', method = 'GET', options) => {
         try {
             let req = new PersephoneRequest(url, method)
             return req.openConnectionAndSendRequest(this.onErrorCallback, this.onLoadCallback)
@@ -12,9 +38,9 @@ class Persephone {
         reject(new PersephoneError('xhrError', {}, 0, error))
     }
 
-    onLoadCallback(req, resolve, reject) {
+    onLoadCallback = (req, resolve, reject) => {
         let response = req.getResponse()
-        if (!response.validStatus) {
+        if (!this.isStatusCodeValid(response.statusCode)) {
             reject(response)
         } else {
             resolve(response)
@@ -23,11 +49,7 @@ class Persephone {
 }
 
 class PersephoneRequest {
-    constructor(url, method, headers = {}, body = '', aditionalErrorCodes = [], errorsWhitelist = [], onloadCallback) {
-        this.errorCodes = [0, 400, 401, 403, 404, 405, 500, 502, 503]
-        this.addErrorsToList(aditionalErrorCodes)
-        this.removeErrorsFromList(errorsWhitelist)
-
+    constructor(url, method, headers = {}, body = '') {
         this.url = url
         this.method = method
         this.headers = headers
@@ -44,16 +66,6 @@ class PersephoneRequest {
         this.readyState = this.updateReadyState()
         this.statusCode = this.updateStatusCode()
         this.body = body
-    }
-
-    addErrorsToList = (aditionalErrorCodes) => {
-        this.errorCodes.push(...aditionalErrorCodes)
-    }
-
-    removeErrorsFromList = (errorsWhitelist) => {
-        this.errorCodes.filter((v) => {
-            return errorsWhitelist.indexOf(v) !== -1
-        })
     }
 
     updateReadyState() {
@@ -101,21 +113,16 @@ class PersephoneRequest {
     }
 }
 
+const _getContentType = new WeakMap()
+
 class PersephoneResponse {
     constructor(statusCode, headers, body, errorStatuses) {
         this.statusCode = statusCode
         this.headers = this.parseHeaders(headers)
         this.body = body
-        this.validStatus = this.validateStatusCode(errorStatuses)
-    }
-
-    getContentType = () => {
-        return this.headers['content-type'] || 'text/plain'
-    }
-
-    validateStatusCode = (errorStatuses) => {
-        return errorStatuses.indexOf(this.statusCode) === -1
-
+        _getContentType.set(this, () => {
+            return this.headers['content-type'] || 'text/plain'
+        })
     }
 
     parseHeaders(headers) {
@@ -129,8 +136,9 @@ class PersephoneResponse {
         return headersObj
     }
 
-    json() {
-        let contentType = this.getContentType()
+    json = () => {
+        let getContentType = _getContentType.get(this)
+        let contentType = getContentType()
         if (/^text\/json.*/.test(contentType) || /^text\/plain.*/.test(contentType) || /^application\/json.*/.test(contentType)) {
             try {
                 return JSON.parse(this.body)
