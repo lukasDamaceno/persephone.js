@@ -13,8 +13,8 @@ class Persephone {
         })
     }
 
-    isStatusCodeValid = () => {
-        return this.errorStatuses.indexOf(this.statusCode) === -1
+    isStatusCodeValid = (statusCode) => {
+        return this.errorStatuses.indexOf(statusCode) === -1
     }
 
     get = async (url, options = {}) => {
@@ -34,25 +34,28 @@ class Persephone {
         }
     }
 
-    onErrorCallback(error, reject) {
-        reject(new PersephoneError('xhrError', {}, 0, error))
+    onErrorCallback(error, request, reject, event) {
+        let perserr = new PersephoneError(event, {}, 0, error)
+        reject(request.getResponse(perserr))
     }
 
-    onLoadCallback = (req, resolve, reject) => {
-        let response = req.getResponse()
-        if (!this.isStatusCodeValid(response.statusCode)) {
-            reject(response)
-        } else {
+    onLoadCallback = (request, resolve, reject) => {
+        let response = request.getResponse()
+        if (this.isStatusCodeValid(response.statusCode)) {
             resolve(response)
+        } else {
+            reject(response)
         }
     }
 }
 
 class PersephoneRequest {
-    constructor(url, method, headers = {}, body = '') {
+    constructor(url, method, headers = {}, body = '', timeout = 10000) {
         this.url = url
         this.method = method
         this.headers = headers
+        this.timeout = timeout
+
         this._xhr = new XMLHttpRequest()
         this._xhr.onreadystatechange = this.xhrStateChangeEventCatcher
 
@@ -65,6 +68,7 @@ class PersephoneRequest {
         ]
         this.readyState = this.updateReadyState()
         this.statusCode = this.updateStatusCode()
+
         this.body = body
     }
 
@@ -83,14 +87,17 @@ class PersephoneRequest {
     openConnectionAndSendRequest = (onErrorCallback, onLoadCallback) => {
         return new Promise((resolve, reject) => {
             try {
+                this._xhr.timeout = this.timeout
+                this._xhr.onload = () => { return onLoadCallback(this, resolve, reject) }
+                this._xhr.ontimeout = (error) => { return onErrorCallback(error, this, reject, 'responseTimeout') }
+                this._xhr.onabort = (error) => { return onErrorCallback(error, this, reject, 'abort') }
+                this._xhr.onerror = (error) => { return onErrorCallback(error, this, reject, 'error') }
                 try {
                     this._xhr.open(this.method, this.url)
                     this._xhr.send()
                 } catch (error) {
                     console.log('hey dood')
                 }
-                this._xhr.onerror = function (error) { return onErrorCallback(error, reject) }
-                this._xhr.onload = () => { return onLoadCallback(this, resolve, reject) }
             } catch (error) {
                 reject(PersephoneError())
             }
@@ -102,27 +109,22 @@ class PersephoneRequest {
         this.updateStatusCode()
     }
 
-    getResponse = () => {
-        if (this.readyState.name === 'DONE') {
-            if (this.statusCode !== 0) {
-                return new PersephoneResponse(this.statusCode, this._xhr.getAllResponseHeaders(), this._xhr.response, this.errorCodes)
-            } else {
-                throw PersephoneError('status_zero')
-            }
-        }
+    getResponse = (error = undefined) => {
+        return new PersephoneResponse(this.statusCode, this._xhr.getAllResponseHeaders(), this._xhr.response, error)
     }
 }
 
 const _getContentType = new WeakMap()
 
 class PersephoneResponse {
-    constructor(statusCode, headers, body, errorStatuses) {
+    constructor(statusCode, headers, body, error = undefined) {
         this.statusCode = statusCode
         this.headers = this.parseHeaders(headers)
         this.body = body
         _getContentType.set(this, () => {
-            return this.headers['content-type'] || 'text/plain'
+            return this.headers['content-type'] || undefined
         })
+        this.errorDetails = error
     }
 
     parseHeaders(headers) {
@@ -150,17 +152,20 @@ class PersephoneResponse {
 }
 
 class PersephoneError extends Error {
-    constructor(message = 'unknown', response = {}, statusCode = "", xhrError) {
+    constructor(type = 'unknown', response = {}, xhrError) {
         super()
         this.messages = {
             'unknown': "Unknown Persephone error.",
             'statusZero': 'Erro: Requisição retornou status 0.',
-            'notJson': 'Objeto não pode ser serializado como json',
-            'xhrError': 'Erro no XHR'
+            'notJson': 'Objeto não pode ser serializado como json.',
+            'error': 'Um erro interno na requisição impediu que a solicitação fosse enviada.',
+            'responseTimeout': 'A resposta para solicitação excedeu o tempo limite.',
+            'abort': 'A solicitação foi abortada durante o progresso.'
         }
         this.name = "Persephone Error"
         this.level = "lel"
-        this.message = this.messages[message] || this.messages.unknown
+        this.type = type
+        this.message = this.messages[type] || this.messages.unknown
         this.toString = () => { return this.name + ": " + this.message; }
         this.response = response
         this.xhrError = xhrError || false
